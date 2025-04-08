@@ -107,6 +107,21 @@ jobs:
       shell: bash
 
     # --- Docker Steps ---
+    # Set the image tag to the commit SHA for better tracking
+    - name: Set Docker Image Tag
+      run: |
+        echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+        echo "Using image tag: ${{ github.sha }}"
+      shell: bash
+
+    # Install Docker Compose
+    - name: Install Docker Compose
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y docker-compose-plugin
+        docker compose version
+      shell: bash
+
     # Condition: Run if *any* monitored files changed (TF, app, Dockerfile, etc.)
     - name: Set up Docker Buildx
       if: steps.changed-files.outputs.any_changed == 'true'
@@ -134,28 +149,22 @@ jobs:
         echo "UPSTASH_REDIS_URL=${{ secrets.UPSTASH_REDIS_URL }}" >> .env
       shell: bash
 
-    - name: Build, tag, and push Docker images
-      if: steps.changed-files.outputs.any_changed == 'true'
-      env:
-        AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} # Make sure this secret is set
-        REGION: ca-central-1
-        FRONTEND_REPO: irene-frontend
-        BACKEND_REPO: irene-backend
+    # Build and push the frontend image
+    - name: Build and Push Frontend Image
+      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/')
       run: |
-        IMAGE_TAG=${{ github.sha }} # Use full commit SHA for better tracking
+        cd frontend
+        docker compose -f docker-compose.prod.yml build
+        docker compose -f docker-compose.prod.yml push
+        cd ..
+      shell: bash
 
-        FRONTEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO
-        BACKEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO
-
-        # Docker compose build will read the .env file created in the previous step
-        docker-compose build
-
-        docker tag blynk-frontend:latest $FRONTEND_URI:$IMAGE_TAG
-        docker tag blynk-frontend:latest $FRONTEND_URI:latest # Optional: tag latest
-        docker tag blynk-backend:latest $BACKEND_URI:$IMAGE_TAG
-        docker tag blynk-backend:latest $BACKEND_URI:latest # Optional: tag latest
-
-        docker push $FRONTEND_URI:$IMAGE_TAG
-        docker push $FRONTEND_URI:latest # Optional
-        docker push $BACKEND_URI:$IMAGE_TAG
-        docker push $BACKEND_URI:latest # Optional
+    # Build and push the backend image
+    - name: Build and Push Backend Image
+      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/')
+      run: |
+        cd backend
+        docker compose -f docker-compose.prod.yml build
+        docker compose -f docker-compose.prod.yml push
+        cd ..
+      shell: bash
