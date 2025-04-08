@@ -52,18 +52,29 @@ jobs:
     - name: Terraform Init
       id: init
       run: |
-        # Assuming your Terraform files are in a 'terraform' subdirectory
-        terraform -chdir=./terraform-phase1 init \
+        cd ./terraform-phase1
+        terraform init \
           -backend-config="bucket=capstonebucketcloud2025" \
           -backend-config="key=production/terraform.tfstate" \
           -backend-config="region=ca-central-1"
+        cd ..
+      shell: bash
 
     # Conditionally Apply Terraform ONLY if .tf files changed
     - name: Terraform Apply (if TF files changed)
       id: apply
       # This checks if any file within the 'terraform/' directory triggered the 'changed-files' step
       if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform/')
-      run: terraform -chdir=./terraform-phase1 apply -auto-approve -no-color
+      run: |
+        cd ./terraform-phase1
+        terraform apply -auto-approve -no-color
+        # Verify the apply was successful
+        if [ $? -ne 0 ]; then
+          echo "Terraform apply failed"
+          exit 1
+        fi
+        cd ..
+      shell: bash
 
     # Always Get Terraform Outputs (reads from the state file)
     - name: Get Terraform Outputs
@@ -72,14 +83,28 @@ jobs:
       # to get the current values from the state file
       run: |
         cd ./terraform-phase1
-        frontend_dns=$(terraform output -raw frontend_alb_dns)
-        backend_dns=$(terraform output -raw backend_alb_dns)
+        
+        # Check if outputs exist before trying to read them
+        if terraform output -json | grep -q "frontend_alb_dns"; then
+          frontend_dns=$(terraform output -raw frontend_alb_dns)
+          echo "TF_FRONTEND_ALB_DNS=$frontend_dns" >> $GITHUB_ENV
+          echo "Frontend ALB DNS: $frontend_dns"
+        else
+          echo "Warning: frontend_alb_dns output not found in Terraform state"
+          echo "TF_FRONTEND_ALB_DNS=placeholder" >> $GITHUB_ENV
+        fi
+        
+        if terraform output -json | grep -q "backend_alb_dns"; then
+          backend_dns=$(terraform output -raw backend_alb_dns)
+          echo "TF_BACKEND_ALB_DNS=$backend_dns" >> $GITHUB_ENV
+          echo "Backend ALB DNS: $backend_dns"
+        else
+          echo "Warning: backend_alb_dns output not found in Terraform state"
+          echo "TF_BACKEND_ALB_DNS=placeholder" >> $GITHUB_ENV
+        fi
+        
         cd ..
-
-        # Make outputs available to subsequent steps via environment variables
-        echo "TF_FRONTEND_ALB_DNS=$frontend_dns" >> $GITHUB_ENV
-        echo "TF_BACKEND_ALB_DNS=$backend_dns" >> $GITHUB_ENV
-      # !! Replace output names with your actual names from outputs.tf !!
+      shell: bash
 
     # --- Docker Steps ---
     # Condition: Run if *any* monitored files changed (TF, app, Dockerfile, etc.)
