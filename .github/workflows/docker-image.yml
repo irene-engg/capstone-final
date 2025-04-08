@@ -205,20 +205,40 @@ jobs:
     - name: Build and Push Frontend Image
       # Run on manual trigger OR if frontend/ files changed
       if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        FRONTEND_REPO: irene-frontend
+        IMAGE_TAG: ${{ github.sha }}
       run: |
-        echo "DEBUG: Running Frontend Build/Push step. Event: ${{ github.event_name }}"
-        # Run from root, specifying the compose file and the service name
+        echo "DEBUG: Building Frontend Image. Event: ${{ github.event_name }}"
         docker compose -f docker-compose.yaml build frontend
-        docker compose -f docker-compose.yaml push frontend
+
+        echo "DEBUG: Tagging Frontend Image for ECR: $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
+        docker tag blynk-frontend:latest $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG
+        docker tag blynk-frontend:latest $ECR_REGISTRY/$FRONTEND_REPO:latest # Optional: also tag latest
+
+        echo "DEBUG: Pushing Frontend Image to ECR: $ECR_REGISTRY/$FRONTEND_REPO"
+        docker push $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$FRONTEND_REPO:latest # Optional
       shell: bash
 
     # Build and push the backend image
     - name: Build and Push Backend Image
       # Run on manual trigger OR if backend/ files changed
       if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        BACKEND_REPO: irene-backend
+        IMAGE_TAG: ${{ github.sha }}
       run: |
-        echo "DEBUG: Running Backend Build/Push step. Event: ${{ github.event_name }}"
-        # Run from root, specifying the compose file and the service name
+        echo "DEBUG: Building Backend Image. Event: ${{ github.event_name }}"
         docker compose -f docker-compose.yaml build backend
-        docker compose -f docker-compose.yaml push backend
+
+        echo "DEBUG: Tagging Backend Image for ECR: $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
+        docker tag blynk-backend:latest $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG
+        docker tag blynk-backend:latest $ECR_REGISTRY/$BACKEND_REPO:latest # Optional: also tag latest
+
+        echo "DEBUG: Pushing Backend Image to ECR: $ECR_REGISTRY/$BACKEND_REPO"
+        docker push $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$BACKEND_REPO:latest # Optional
       shell: bash
