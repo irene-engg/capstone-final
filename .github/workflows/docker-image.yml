@@ -91,6 +91,21 @@ jobs:
         cd ..
       shell: bash
 
+    # Always Apply Terraform on first run
+    - name: Always Apply Terraform (on first run)
+      id: first-run-apply
+      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'workflow_dispatch'
+      run: |
+        cd ./terraform-phase1
+        terraform apply -auto-approve -no-color
+        # Verify the apply was successful
+        if [ $? -ne 0 ]; then
+          echo "Terraform apply failed"
+          exit 1
+        fi
+        cd ..
+      shell: bash
+
     # Always Get Terraform Outputs (reads from the state file)
     - name: Get Terraform Outputs
       id: tf_output
