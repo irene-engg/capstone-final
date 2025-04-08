@@ -193,10 +193,13 @@ jobs:
         echo "UPSTASH_REDIS_URL=${{ secrets.UPSTASH_REDIS_URL }}" >> .env
       shell: bash
 
-    # Build and push the frontend image
+    # Build and push the frontend image (DEBUG: Simplified Condition)
     - name: Build and Push Frontend Image
-      if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
+      if: github.event_name == 'workflow_dispatch' # Temporarily removed changed-files check
+      # Original condition:
+      # if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
       run: |
+        echo "DEBUG: Running Frontend Build/Push step because event_name is ${{ github.event_name }}"
         cd frontend
         # Ensure you have a frontend/docker-compose.prod.yml or adjust path
         docker compose -f docker-compose.prod.yml build
@@ -204,10 +207,13 @@ jobs:
         cd ..
       shell: bash
 
-    # Build and push the backend image
+    # Build and push the backend image (DEBUG: Simplified Condition)
     - name: Build and Push Backend Image
-      if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
+      if: github.event_name == 'workflow_dispatch' # Temporarily removed changed-files check
+      # Original condition:
+      # if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
       run: |
+        echo "DEBUG: Running Backend Build/Push step because event_name is ${{ github.event_name }}"
         cd backend
         # Ensure you have a backend/docker-compose.prod.yml or adjust path
         docker compose -f docker-compose.prod.yml build
