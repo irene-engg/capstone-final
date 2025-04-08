@@ -137,6 +137,14 @@ jobs:
       shell: bash
 
     # --- Docker Steps ---
+    # Debug: Check event name
+    - name: Debug Event Name
+      if: always() # Always run this step
+      run: |
+        echo "DEBUG: The current github.event_name is: ${{ github.event_name }}"
+        echo "DEBUG: Condition 'github.event_name == \'workflow_dispatch\'' evaluates to: ${{ github.event_name == 'workflow_dispatch' }}"
+      shell: bash
+
     # Set the image tag to the commit SHA for better tracking
     - name: Set Docker Image Tag
       run: |
@@ -193,30 +201,24 @@ jobs:
         echo "UPSTASH_REDIS_URL=${{ secrets.UPSTASH_REDIS_URL }}" >> .env
       shell: bash
 
-    # Build and push the frontend image (DEBUG: Simplified Condition)
+    # Build and push the frontend image
     - name: Build and Push Frontend Image
-      if: github.event_name == 'workflow_dispatch' # Temporarily removed changed-files check
-      # Original condition:
-      # if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
+      # Run on manual trigger OR if frontend/ files changed
+      if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
       run: |
-        echo "DEBUG: Running Frontend Build/Push step because event_name is ${{ github.event_name }}"
-        cd frontend
-        # Ensure you have a frontend/docker-compose.prod.yml or adjust path
-        docker compose -f docker-compose.prod.yml build
-        docker compose -f docker-compose.prod.yml push
-        cd ..
+        echo "DEBUG: Running Frontend Build/Push step. Event: ${{ github.event_name }}"
+        # Run from root, specifying the compose file and the service name
+        docker compose -f docker-compose.yaml build frontend
+        docker compose -f docker-compose.yaml push frontend
       shell: bash
 
-    # Build and push the backend image (DEBUG: Simplified Condition)
+    # Build and push the backend image
     - name: Build and Push Backend Image
-      if: github.event_name == 'workflow_dispatch' # Temporarily removed changed-files check
-      # Original condition:
-      # if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
+      # Run on manual trigger OR if backend/ files changed
+      if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
       run: |
-        echo "DEBUG: Running Backend Build/Push step because event_name is ${{ github.event_name }}"
-        cd backend
-        # Ensure you have a backend/docker-compose.prod.yml or adjust path
-        docker compose -f docker-compose.prod.yml build
-        docker compose -f docker-compose.prod.yml push
-        cd ..
+        echo "DEBUG: Running Backend Build/Push step. Event: ${{ github.event_name }}"
+        # Run from root, specifying the compose file and the service name
+        docker compose -f docker-compose.yaml build backend
+        docker compose -f docker-compose.yaml push backend
       shell: bash
