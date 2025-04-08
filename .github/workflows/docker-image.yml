@@ -52,7 +52,7 @@ jobs:
         FRONTEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO
         BACKEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO
 
-        docker-compose build
+        docker compose build
 
         docker tag blynk-frontend:latest $FRONTEND_URI:$IMAGE_TAG
         docker tag blynk-backend:latest $BACKEND_URI:$IMAGE_TAG
