@@ -71,9 +71,9 @@ jobs:
       # Run this step always *after* init (and potentially apply)
       # to get the current values from the state file
       run: |
-        cd ./terraform-phase1 # Need to be in the TF directory
-        frontend_dns=$(terraform output -raw frontend_alb_dns_output_name)
-        backend_dns=$(terraform output -raw backend_alb_dns_output_name)
+        cd ./terraform-phase1
+        frontend_dns=$(terraform output -raw frontend_alb_dns)
+        backend_dns=$(terraform output -raw backend_alb_dns)
         cd ..
 
         # Make outputs available to subsequent steps via environment variables
