@@ -1,37 +1,105 @@
-name: Docker Image CI
+name: Deploy Infrastructure and Application
 
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch: # Allows manual trigger
 
 jobs:
-  build-and-push:
+  deploy:
+    name: Deploy Infra & App
     runs-on: ubuntu-latest
+    # Optional: Link to GitHub Environment for secrets/protection rules
+    # environment: production
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
+      # Fetch all history so we can compare commits if needed by changed-files action
       with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ca-central-1
+        fetch-depth: 0
 
+    # --- Determine Changed Files ---
+    # This action checks which files changed compared to the previous commit on the branch
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v44 # Using a popular action for this
+      with:
+        # List all file patterns that should trigger a build/deployment
+        # Be specific to avoid unnecessary runs
+        files: |
+          terraform/**.tf
+          backend/**
+          frontend/**
+          docker-compose.yaml
+          **/Dockerfile*
+          .github/workflows/docker-image.yml
+
+    # --- Terraform Steps ---
+    - name: Configure AWS credentials
+      # Use credentials with permissions for both Terraform apply and ECR push
+      # Or use separate steps with different credentials and conditions
+      id: configure-aws-creds
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }} # Combined TF & ECR Key
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # Combined TF & ECR Key
+        aws-region: ca-central-1 # Your AWS region
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform Init
+      id: init
+      run: |
+        # Assuming your Terraform files are in a 'terraform' subdirectory
+        terraform -chdir=./terraform-phase1 init \
+          -backend-config="bucket=capstonebucketcloud2025" \
+          -backend-config="key=production/terraform.tfstate" \
+          -backend-config="region=ca-central-1"
+
+    # Conditionally Apply Terraform ONLY if .tf files changed
+    - name: Terraform Apply (if TF files changed)
+      id: apply
+      # This checks if any file within the 'terraform/' directory triggered the 'changed-files' step
+      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform/')
+      run: terraform -chdir=./terraform-phase1 apply -auto-approve -no-color
+
+    # Always Get Terraform Outputs (reads from the state file)
+    - name: Get Terraform Outputs
+      id: tf_output
+      # Run this step always *after* init (and potentially apply)
+      # to get the current values from the state file
+      run: |
+        cd ./terraform-phase1 # Need to be in the TF directory
+        frontend_dns=$(terraform output -raw frontend_alb_dns_output_name)
+        backend_dns=$(terraform output -raw backend_alb_dns_output_name)
+        cd ..
+
+        # Make outputs available to subsequent steps via environment variables
+        echo "TF_FRONTEND_ALB_DNS=$frontend_dns" >> $GITHUB_ENV
+        echo "TF_BACKEND_ALB_DNS=$backend_dns" >> $GITHUB_ENV
+      # !! Replace output names with your actual names from outputs.tf !!
+
+    # --- Docker Steps ---
+    # Condition: Run if *any* monitored files changed (TF, app, Dockerfile, etc.)
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      if: steps.changed-files.outputs.any_changed == 'true'
+      uses: docker/setup-buildx-action@v3
 
     - name: Log in to Amazon ECR
-      id: login-ecr
+      if: steps.changed-files.outputs.any_changed == 'true'
+      # Uses credentials configured in the 'configure-aws-creds' step
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Create .env file
+    - name: Create .env file for Docker Build
+      if: steps.changed-files.outputs.any_changed == 'true'
       run: |
-        echo "FRONTEND_ALB_DNS=${{ secrets.FRONTEND_ALB_DNS }}" >> .env
-        echo "BACKEND_ALB_DNS=${{ secrets.BACKEND_ALB_DNS }}" >> .env
+        # Use outputs retrieved from TF state (available via GITHUB_ENV)
+        echo "FRONTEND_ALB_DNS=${{ env.TF_FRONTEND_ALB_DNS }}" >> .env
+        echo "BACKEND_ALB_DNS=${{ env.TF_BACKEND_ALB_DNS }}" >> .env
+
+        # Use SECRETS for sensitive data
         echo "BACKEND_PORT=${{ secrets.BACKEND_PORT }}" >> .env
         echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
         echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
@@ -39,23 +107,30 @@ jobs:
         echo "CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}" >> .env
         echo "CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}" >> .env
         echo "UPSTASH_REDIS_URL=${{ secrets.UPSTASH_REDIS_URL }}" >> .env
+      shell: bash
 
     - name: Build, tag, and push Docker images
+      if: steps.changed-files.outputs.any_changed == 'true'
       env:
-        AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} # Make sure this secret is set
         REGION: ca-central-1
         FRONTEND_REPO: irene-frontend
         BACKEND_REPO: irene-backend
       run: |
-        IMAGE_TAG=$(git rev-parse --short HEAD)
+        IMAGE_TAG=${{ github.sha }} # Use full commit SHA for better tracking
 
         FRONTEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO
         BACKEND_URI=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO
 
-        docker compose build
+        # Docker compose build will read the .env file created in the previous step
+        docker-compose build
 
         docker tag blynk-frontend:latest $FRONTEND_URI:$IMAGE_TAG
+        docker tag blynk-frontend:latest $FRONTEND_URI:latest # Optional: tag latest
         docker tag blynk-backend:latest $BACKEND_URI:$IMAGE_TAG
+        docker tag blynk-backend:latest $BACKEND_URI:latest # Optional: tag latest
 
         docker push $FRONTEND_URI:$IMAGE_TAG
+        docker push $FRONTEND_URI:latest # Optional
         docker push $BACKEND_URI:$IMAGE_TAG
+        docker push $BACKEND_URI:latest # Optional
