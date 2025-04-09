@@ -6,6 +6,12 @@ terraform {
     }
   }
   required_version = ">= 1.6.6"
+  
+  backend "s3" {
+    bucket = "cloudcapstone2025"
+    key    = "phase1/terraform.tfstate"
+    region = "ca-central-1"
+  }
 }
 
 # To create the resources in the specified region
