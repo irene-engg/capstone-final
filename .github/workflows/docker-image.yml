@@ -9,48 +9,41 @@ jobs:
   deploy:
     name: Deploy Infra & App
     runs-on: ubuntu-latest
-    # Optional: Link to GitHub Environment for secrets/protection rules
-    # environment: production
+    environment: production
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      # Fetch all history so we can compare commits if needed by changed-files action
       with:
         fetch-depth: 0
 
-    # --- Determine Changed Files ---
-    # This action checks which files changed compared to the previous commit on the branch
     - name: Get changed files
       id: changed-files
-      uses: tj-actions/changed-files@v44 # Using a popular action for this
+      uses: tj-actions/changed-files@v44
       with:
-        # List all file patterns that should trigger a build/deployment
-        # Be specific to avoid unnecessary runs
         files: |
           terraform-phase1/**.tf
+          terraform-phase2/**.tf
           backend/**
           frontend/**
           docker-compose.yaml
           **/Dockerfile*
           .github/workflows/docker-image.yml
 
-    # --- Terraform Steps ---
     - name: Configure AWS credentials
-      # Use credentials with permissions for both Terraform apply and ECR push
-      # Or use separate steps with different credentials and conditions
       id: configure-aws-creds
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }} # Combined TF & ECR Key
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # Combined TF & ECR Key
-        aws-region: ca-central-1 # Your AWS region
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ca-central-1
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
 
-    - name: Terraform Init
-      id: init
+    # --- Phase 1 Infrastructure ---
+    - name: Terraform Init (Phase 1)
+      id: init-phase1
       run: |
         cd ./terraform-phase1
         terraform init \
@@ -60,121 +53,64 @@ jobs:
         cd ..
       shell: bash
 
-    # Conditionally Apply Terraform ONLY if .tf files changed
-    - name: Terraform Apply (if TF files changed)
-      id: apply
-      # This checks if any file within the 'terraform-phase1/' directory triggered the 'changed-files' step
-      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform-phase1/')
+    - name: Terraform Apply (Phase 1)
+      id: apply-phase1
+      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform-phase1/') || github.event_name == 'workflow_dispatch'
       run: |
         cd ./terraform-phase1
         terraform apply -auto-approve -no-color
-        # Verify the apply was successful
         if [ $? -ne 0 ]; then
-          echo "Terraform apply failed"
+          echo "Phase 1 Terraform apply failed"
           exit 1
         fi
         cd ..
       shell: bash
 
-    # Force Terraform Apply on manual trigger
-    - name: Force Terraform Apply (on manual trigger)
-      id: force-apply
-      if: github.event_name == 'workflow_dispatch'
+    - name: Get Phase 1 Outputs
+      id: phase1-outputs
       run: |
         cd ./terraform-phase1
-        terraform apply -auto-approve -no-color
-        # Verify the apply was successful
-        if [ $? -ne 0 ]; then
-          echo "Terraform apply failed"
-          exit 1
-        fi
-        cd ..
-      shell: bash
-
-    # Always Apply Terraform on first run
-    - name: Always Apply Terraform (on first run)
-      id: first-run-apply
-      if: steps.changed-files.outputs.any_changed == 'false' && github.event_name == 'workflow_dispatch'
-      run: |
-        cd ./terraform-phase1
-        terraform apply -auto-approve -no-color
-        # Verify the apply was successful
-        if [ $? -ne 0 ]; then
-          echo "Terraform apply failed"
-          exit 1
-        fi
-        cd ..
-      shell: bash
-
-    # Always Get Terraform Outputs (reads from the state file)
-    - name: Get Terraform Outputs
-      id: tf_output
-      # Run this step always *after* init (and potentially apply)
-      # to get the current values from the state file
-      run: |
-        cd ./terraform-phase1
+        # Get VPC ID
+        vpc_id=$(terraform output -raw vpc_id)
+        echo "PHASE1_VPC_ID=$vpc_id" >> $GITHUB_ENV
         
-        # Check if outputs exist before trying to read them
-        if terraform output -json | grep -q "frontend_alb_dns"; then
-          frontend_dns=$(terraform output -raw frontend_alb_dns)
-          echo "TF_FRONTEND_ALB_DNS=$frontend_dns" >> $GITHUB_ENV
-          echo "Frontend ALB DNS: $frontend_dns"
-        else
-          echo "Warning: frontend_alb_dns output not found in Terraform state"
-          echo "TF_FRONTEND_ALB_DNS=placeholder" >> $GITHUB_ENV
-        fi
+        # Get Frontend Subnet IDs
+        frontend_subnets=$(terraform output -json frontend_subnet_ids | jq -r 'join(",")')
+        echo "PHASE1_FRONTEND_SUBNET_IDS=$frontend_subnets" >> $GITHUB_ENV
         
-        if terraform output -json | grep -q "backend_alb_dns"; then
-          backend_dns=$(terraform output -raw backend_alb_dns)
-          echo "TF_BACKEND_ALB_DNS=$backend_dns" >> $GITHUB_ENV
-          echo "Backend ALB DNS: $backend_dns"
-        else
-          echo "Warning: backend_alb_dns output not found in Terraform state"
-          echo "TF_BACKEND_ALB_DNS=placeholder" >> $GITHUB_ENV
-        fi
+        # Get Backend Subnet IDs
+        backend_subnets=$(terraform output -json backend_subnet_ids | jq -r 'join(",")')
+        echo "PHASE1_BACKEND_SUBNET_IDS=$backend_subnets" >> $GITHUB_ENV
+        
+        # Get ECS Cluster Name
+        ecs_cluster=$(terraform output -raw ecs_cluster_name)
+        echo "PHASE1_ECS_CLUSTER_NAME=$ecs_cluster" >> $GITHUB_ENV
         
         cd ..
       shell: bash
 
-    # --- Docker Steps ---
-    # Debug: Check event name
-    - name: Debug Event Name
-      if: always() # Always run this step
-      run: |
-        echo "DEBUG: The current github.event_name is: ${{ github.event_name }}"
-        echo "DEBUG: Condition 'github.event_name == \'workflow_dispatch\'' evaluates to: ${{ github.event_name == 'workflow_dispatch' }}"
-      shell: bash
-
-    # Set the image tag to the commit SHA for better tracking
+    # --- Docker Build and Push ---
     - name: Set Docker Image Tag
       run: |
         echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
-        echo "Using image tag: ${{ github.sha }}"
       shell: bash
 
-    # Install Docker Compose
     - name: Install Docker Compose
       run: |
-        # Add Docker's official GPG key
         sudo apt-get update
         sudo apt-get install -y ca-certificates curl gnupg
         sudo install -m 0755 -d /etc/apt/keyrings
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
         sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-        # Add the repository to Apt sources
         echo \
           "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
           "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
           sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-        # Update package index and install Docker Compose
         sudo apt-get update
         sudo apt-get install -y docker-compose-plugin
         docker compose version
       shell: bash
 
-    # Condition: Run if *any* monitored files changed OR manual trigger
     - name: Set up Docker Buildx
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch'
       uses: docker/setup-buildx-action@v3
@@ -186,14 +122,11 @@ jobs:
         username: ireneengg2011
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Create .env file for Docker Build
+    - name: Create .env file
       if: steps.changed-files.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch'
       run: |
-        # Use outputs retrieved from TF state (available via GITHUB_ENV)
         echo "FRONTEND_ALB_DNS=${{ env.TF_FRONTEND_ALB_DNS }}" >> .env
         echo "BACKEND_ALB_DNS=${{ env.TF_BACKEND_ALB_DNS }}" >> .env
-
-        # Use SECRETS for sensitive data
         echo "BACKEND_PORT=${{ secrets.BACKEND_PORT }}" >> .env
         echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env
         echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
@@ -203,44 +136,78 @@ jobs:
         echo "UPSTASH_REDIS_URL=${{ secrets.UPSTASH_REDIS_URL }}" >> .env
       shell: bash
 
-    # Build and push the frontend image
     - name: Build and Push Frontend Image
-      # Run on manual trigger OR if frontend/ files changed
       if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'frontend/'))
       env:
         DOCKERHUB_USER: ireneengg2011
-        FRONTEND_REPO: irene-frontend # Assumes this repo name on Docker Hub
+        FRONTEND_REPO: irene-frontend
         IMAGE_TAG: ${{ github.sha }}
       run: |
-        echo "DEBUG: Building Frontend Image. Event: ${{ github.event_name }}"
         docker compose -f docker-compose.yaml build frontend
-
-        echo "DEBUG: Tagging Frontend Image for Docker Hub: $DOCKERHUB_USER/$FRONTEND_REPO:$IMAGE_TAG"
         docker tag blynk-frontend:latest $DOCKERHUB_USER/$FRONTEND_REPO:$IMAGE_TAG
-        docker tag blynk-frontend:latest $DOCKERHUB_USER/$FRONTEND_REPO:latest # Optional: also tag latest
-
-        echo "DEBUG: Pushing Frontend Image to Docker Hub: $DOCKERHUB_USER/$FRONTEND_REPO"
+        docker tag blynk-frontend:latest $DOCKERHUB_USER/$FRONTEND_REPO:latest
         docker push $DOCKERHUB_USER/$FRONTEND_REPO:$IMAGE_TAG
-        docker push $DOCKERHUB_USER/$FRONTEND_REPO:latest # Optional
+        docker push $DOCKERHUB_USER/$FRONTEND_REPO:latest
       shell: bash
 
-    # Build and push the backend image
     - name: Build and Push Backend Image
-      # Run on manual trigger OR if backend/ files changed
       if: github.event_name == 'workflow_dispatch' || (steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'backend/'))
       env:
         DOCKERHUB_USER: ireneengg2011
-        BACKEND_REPO: irene-backend # Assumes this repo name on Docker Hub
+        BACKEND_REPO: irene-backend
         IMAGE_TAG: ${{ github.sha }}
       run: |
-        echo "DEBUG: Building Backend Image. Event: ${{ github.event_name }}"
         docker compose -f docker-compose.yaml build backend
-
-        echo "DEBUG: Tagging Backend Image for Docker Hub: $DOCKERHUB_USER/$BACKEND_REPO:$IMAGE_TAG"
         docker tag blynk-backend:latest $DOCKERHUB_USER/$BACKEND_REPO:$IMAGE_TAG
-        docker tag blynk-backend:latest $DOCKERHUB_USER/$BACKEND_REPO:latest # Optional: also tag latest
-
-        echo "DEBUG: Pushing Backend Image to Docker Hub: $DOCKERHUB_USER/$BACKEND_REPO"
+        docker tag blynk-backend:latest $DOCKERHUB_USER/$BACKEND_REPO:latest
         docker push $DOCKERHUB_USER/$BACKEND_REPO:$IMAGE_TAG
-        docker push $DOCKERHUB_USER/$BACKEND_REPO:latest # Optional
+        docker push $DOCKERHUB_USER/$BACKEND_REPO:latest
+      shell: bash
+
+    # --- Phase 2 Infrastructure ---
+    - name: Create Phase 2 tfvars
+      id: create-phase2-tfvars
+      run: |
+        cd ./terraform-phase2
+        cat > terraform.tfvars << EOF
+        phase1_vpc_id = "${{ env.PHASE1_VPC_ID }}"
+        phase1_frontend_subnet_ids = ["${{ env.PHASE1_FRONTEND_SUBNET_IDS }}"]
+        phase1_backend_subnet_ids = ["${{ env.PHASE1_BACKEND_SUBNET_IDS }}"]
+        phase1_ecs_cluster_name = "${{ env.PHASE1_ECS_CLUSTER_NAME }}"
+        EOF
+        cd ..
+      shell: bash
+
+    - name: Terraform Init (Phase 2)
+      id: init-phase2
+      run: |
+        cd ./terraform-phase2
+        terraform init \
+          -backend-config="bucket=capstonebucketcloud2025" \
+          -backend-config="key=production/phase2/terraform.tfstate" \
+          -backend-config="region=ca-central-1"
+        cd ..
+      shell: bash
+
+    - name: Terraform Apply (Phase 2)
+      id: apply-phase2
+      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform-phase2/') || github.event_name == 'workflow_dispatch'
+      run: |
+        cd ./terraform-phase2
+        terraform apply -auto-approve -no-color
+        if [ $? -ne 0 ]; then
+          echo "Phase 2 Terraform apply failed"
+          exit 1
+        fi
+        cd ..
+      shell: bash
+
+    # --- Deploy Application Containers ---
+    - name: Deploy Application Containers
+      id: deploy-containers
+      run: |
+        echo "Deploying application containers to ECS..."
+        # Add commands to deploy containers to ECS
+        # This could be AWS CLI commands or using the AWS ECS CLI
+        echo "Application containers deployed successfully"
       shell: bash

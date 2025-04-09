@@ -37,3 +37,12 @@ module "frontendalb" {
   frontend_subnet_ids           = module.vpc.frontend_subnet_ids
 }
 
+# Create ECS Cluster
+resource "aws_ecs_cluster" "main_cluster" {
+  name = "main-cluster" # Or choose a more specific name
+
+  tags = {
+    Name = "main-cluster"
+  }
+}
+
