@@ -55,7 +55,6 @@ jobs:
 
     - name: Terraform Apply (Phase 1)
       id: apply-phase1
-      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform-phase1/') || github.event_name == 'workflow_dispatch'
       run: |
         cd ./terraform-phase1
         terraform apply -auto-approve -no-color
@@ -191,7 +190,6 @@ jobs:
 
     - name: Terraform Apply (Phase 2)
       id: apply-phase2
-      if: steps.changed-files.outputs.any_changed == 'true' && contains(steps.changed-files.outputs.all_changed_files, 'terraform-phase2/') || github.event_name == 'workflow_dispatch'
       run: |
         cd ./terraform-phase2
         terraform apply -auto-approve -no-color
