@@ -18,15 +18,13 @@ output "frontend_subnet2" {
   value       = aws_subnet.frontend_subnet2.id
 }
 
-
 output "frontend_subnet_ids" {
-  description = "List of public subnet IDs"
-  value       = [aws_subnet.backend_subnet1.id, aws_subnet.backend_subnet2.id]
+  description = "List of frontend subnet IDs"
+  value       = [aws_subnet.frontend_subnet1.id, aws_subnet.frontend_subnet2.id]
 }
 
-
 output "backend_subnet_ids" {
-  description = "List of public subnet IDs"
+  description = "List of backend subnet IDs"
   value       = [aws_subnet.backend_subnet1.id, aws_subnet.backend_subnet2.id]
 }
 
